@@ -1,0 +1,20 @@
+[project]
+name = "loki-mcp"
+version = "0.1.0"
+description = "Read-only Loki log MCP server"
+requires-python = ">=3.14"
+license = "MIT"
+dependencies = [
+    "httpx",
+    # The server uses the mcp 2.x API.
+    "mcp[cli]>=2,<3",
+    # Imported directly for the SSE transport.
+    "starlette",
+    "uvicorn",
+]
+
+[project.optional-dependencies]
+# Test dependencies.
+dev = [
+    "pytest",
+]
