@@ -70,3 +70,12 @@ Build the image from the included `Dockerfile` (`docker build .` or
 `podman build .`) and push it to your registry. Run it with
 `MCP_TRANSPORT=sse`; the Deployment, Service, Loki credentials secret and
 network policy are not part of this repository.
+
+The server reports its release in the MCP `initialize` result
+(`serverInfo.version`). To stamp it, build from a checkout with tags:
+
+```
+docker build --build-arg LOKI_MCP_VERSION=$(git describe --tags --match 'loki-mcp-v*' | sed 's/^loki-mcp-v//') .
+```
+
+A build without it reports `dev`.

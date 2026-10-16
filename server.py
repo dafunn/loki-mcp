@@ -44,6 +44,15 @@ ALLOWED_NAMESPACES: frozenset[str] | None = (
     else None
 )
 
+# -- Error results ----------------------------------------------------
+
+
+class ErrorText(str):
+    """A tool result that reports a failure. call_tool sends it with isError set,
+    so a client can tell it from output (a log line or label value can itself
+    start with "Error:")."""
+
+
 # -- Token ------------------------------------------------------------
 
 
@@ -75,13 +84,13 @@ _SELECTOR_RE = re.compile(rf"^\s*{_MATCHER}(?:\s*,\s*{_MATCHER})*\s*$")
 _DURATION_RE = re.compile(r"^\d+[smhdw]$")
 
 
-def _check_namespace(namespace: str) -> str | None:
+def _check_namespace(namespace: str) -> ErrorText | None:
     """Return an error string if namespace is not allowed, else None."""
     if ALLOWED_NAMESPACES is not None and namespace not in ALLOWED_NAMESPACES:
         allowed = ", ".join(sorted(ALLOWED_NAMESPACES))
-        return f"Error: namespace '{namespace}' is not in the allowed set ({allowed})"
+        return ErrorText(f"Error: namespace '{namespace}' is not in the allowed set ({allowed})")
     if not namespace and ALLOWED_NAMESPACES is not None:
-        return "Error: a namespace is required (this tier is namespace-scoped)"
+        return ErrorText("Error: a namespace is required (this tier is namespace-scoped)")
     return None
 
 
@@ -193,7 +202,7 @@ async def _handle_loki_query(args: dict) -> str:
     if err:
         return err
     if selector and not _SELECTOR_RE.match(selector):
-        return (
+        return ErrorText(
             "Error: `selector` must be comma-separated label matchers, e.g. "
             'app="foo", pod=~"bar.*" (no namespace - that is applied for you)'
         )
@@ -202,10 +211,10 @@ async def _handle_loki_query(args: dict) -> str:
         try:
             start_ns, end_ns = _parse_time(start), _parse_time(end)
         except ValueError as e:
-            return f"Error: {e}"
+            return ErrorText(f"Error: {e}")
     else:
         if not _DURATION_RE.match(since):
-            return "Error: `since` must look like 30m, 1h, 2d, or 1w"
+            return ErrorText("Error: `since` must look like 30m, 1h, 2d, or 1w")
         start_ns, end_ns = _since_to_ns(since)
 
     query = _build_logql(namespace, selector, line_filter)
@@ -222,31 +231,31 @@ async def _handle_loki_query(args: dict) -> str:
         )
         return f"query: {query}\n\n{_format_streams(data)}"
     except httpx.HTTPStatusError as e:
-        return f"Error: Loki returned {e.response.status_code}: {e.response.text[:300]}"
+        return ErrorText(f"Error: Loki returned {e.response.status_code}: {e.response.text[:300]}")
     except Exception as e:
-        return f"Error: {e}"
+        return ErrorText(f"Error: {e}")
 
 
 async def _handle_loki_labels(args: dict) -> str:
     since = str(args.get("since", "") or DEFAULT_SINCE).strip()
     if not _DURATION_RE.match(since):
-        return "Error: `since` must look like 30m, 1h, 2d, or 1w"
+        return ErrorText("Error: `since` must look like 30m, 1h, 2d, or 1w")
     start_ns, end_ns = _since_to_ns(since)
     try:
         data = await _loki_get("/loki/api/v1/labels", {"start": start_ns, "end": end_ns})
         names = data.get("data", [])
         return "\n".join(names) if names else "(no labels)"
     except Exception as e:
-        return f"Error: {e}"
+        return ErrorText(f"Error: {e}")
 
 
 async def _handle_loki_label_values(args: dict) -> str:
     label = str(args.get("label", "")).strip()
     if not label:
-        return "Error: 'label' parameter is required"
+        return ErrorText("Error: 'label' parameter is required")
     since = str(args.get("since", "") or DEFAULT_SINCE).strip()
     if not _DURATION_RE.match(since):
-        return "Error: `since` must look like 30m, 1h, 2d, or 1w"
+        return ErrorText("Error: `since` must look like 30m, 1h, 2d, or 1w")
     start_ns, end_ns = _since_to_ns(since)
     try:
         data = await _loki_get(
@@ -263,7 +272,7 @@ async def _handle_loki_label_values(args: dict) -> str:
             values = [v for v in values if v in ALLOWED_NAMESPACES]
         return "\n".join(values) if values else "(no values)"
     except Exception as e:
-        return f"Error: {e}"
+        return ErrorText(f"Error: {e}")
 
 
 # -- Tool definitions -------------------------------------------------
@@ -365,7 +374,13 @@ _METADATA_TOOLS: list[Tool] = [
 
 # -- MCP server -------------------------------------------------------
 
-_server = Server("loki-mcp")
+def release_version() -> str:
+    """The release this build reports to clients: LOKI_MCP_VERSION,
+    stamped into the image from the loki-mcp-v* tag at build time, else `dev`."""
+    return os.environ.get("LOKI_MCP_VERSION", "").strip() or "dev"
+
+
+_server = Server("loki-mcp", version=release_version())
 
 
 async def list_tools(_ctx: Any, _params: PaginatedRequestParams) -> ListToolsResult:
@@ -379,7 +394,8 @@ async def list_tools(_ctx: Any, _params: PaginatedRequestParams) -> ListToolsRes
 
 async def call_tool(_ctx: Any, params: CallToolRequestParams) -> CallToolResult:
     text = await _dispatch(params.name, params.arguments or {})
-    return CallToolResult(content=[TextContent(type="text", text=text)])
+    return CallToolResult(content=[TextContent(type="text", text=text)],
+                          is_error=isinstance(text, ErrorText))
 
 # Each handler is registered with its wire method and params model; the runner
 # validates a request against the model before calling the handler.
@@ -390,17 +406,17 @@ _server.add_request_handler("tools/call", CallToolRequestParams, call_tool)
 async def _dispatch(name: str, args: dict) -> str:
     if name == "loki_query":
         if not EXPOSE_QUERY:
-            return f"Error: tool '{name}' is not enabled on this instance"
+            return ErrorText(f"Error: tool '{name}' is not enabled on this instance")
         return await _handle_loki_query(args)
     if name == "loki_labels":
         if not EXPOSE_METADATA:
-            return f"Error: tool '{name}' is not enabled on this instance"
+            return ErrorText(f"Error: tool '{name}' is not enabled on this instance")
         return await _handle_loki_labels(args)
     if name == "loki_label_values":
         if not EXPOSE_METADATA:
-            return f"Error: tool '{name}' is not enabled on this instance"
+            return ErrorText(f"Error: tool '{name}' is not enabled on this instance")
         return await _handle_loki_label_values(args)
-    return f"Error: unknown tool '{name}'"
+    return ErrorText(f"Error: unknown tool '{name}'")
 
 
 # -- Entry point ------------------------------------------------------
