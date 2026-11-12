@@ -23,9 +23,9 @@ already terminated, which `kubectl logs` cannot.
 | `LOKI_HTTP_TIMEOUT` | `30` | HTTP timeout (seconds) |
 | `EXPOSE_QUERY` | `true` | Enable `loki_query` |
 | `EXPOSE_METADATA` | `false` | Enable `loki_labels`, `loki_label_values` |
-| `MCP_TRANSPORT` | `stdio` | Set to `sse` for in-cluster HTTP/SSE |
-| `MCP_HOST` | `0.0.0.0` | SSE bind host |
-| `MCP_PORT` | `3000` | SSE bind port |
+| `MCP_TRANSPORT` | `stdio` | Set to `streamable-http` to serve over HTTP at `/mcp` (stateless; `/healthz` for probes) |
+| `MCP_HOST` | `0.0.0.0` | HTTP bind host |
+| `MCP_PORT` | `3000` | HTTP bind port |
 
 Truthy values for boolean flags: `1`, `true`, `yes`, `on` (case-insensitive).
 
@@ -68,10 +68,10 @@ LOKI_URL=http://loki.invalid:3100 LOKI_ALLOWED_NAMESPACES=monitoring,default \
 
 Build the image from the included `Dockerfile` (`docker build .` or
 `podman build .`) and push it to your registry. Run it with
-`MCP_TRANSPORT=sse`; the Deployment, Service, Loki credentials secret and
+`MCP_TRANSPORT=streamable-http`; the Deployment, Service, Loki credentials secret and
 network policy are not part of this repository.
 
-The server reports its release in the MCP `initialize` result
+The server reports its release in its MCP server info
 (`serverInfo.version`). To stamp it, build from a checkout with tags:
 
 ```

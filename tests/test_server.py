@@ -161,3 +161,62 @@ def test_release_version_reports_the_build_value(monkeypatch):
 
 def test_server_reports_the_release_version():
     assert server._server.version == server.release_version()
+
+
+# -- streamable HTTP transport -----------------------------------------
+
+
+def _http(app, method, path, headers=None, json=None):
+    """One request to `app` in-process, with its lifespan (the session manager) running."""
+    import httpx2
+
+    async def _call():
+        async with app.router.lifespan_context(app):
+            async with httpx2.AsyncClient(
+                transport=httpx2.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                return await client.request(method, path, headers=headers or {}, json=json)
+
+    return asyncio.run(_call())
+
+
+def _mcp_request(app, method, params=None):
+    """POST one 2026-07-28 request: self-contained, no initialize and no session.
+    The method, and for tools/call the tool name, are repeated in headers."""
+    meta = {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientInfo": {"name": "test", "version": "0"},
+        "io.modelcontextprotocol/clientCapabilities": {},
+    }
+    headers = {
+        "Accept": "application/json, text/event-stream",
+        "MCP-Protocol-Version": "2026-07-28",
+        "Mcp-Method": method,
+    }
+    if params and "name" in params:
+        headers["Mcp-Name"] = params["name"]
+    return _http(
+        app, "POST", "/mcp",
+        headers=headers,
+        json={"jsonrpc": "2.0", "id": 1, "method": method,
+              "params": {**(params or {}), "_meta": meta}},
+    )
+
+
+def test_http_app_serves_tools_list_at_mcp():
+    resp = _mcp_request(server.build_http_app(), "tools/list")
+    assert resp.status_code == 200
+    names = {t["name"] for t in resp.json()["result"]["tools"]}
+    assert {"loki_query", "loki_labels", "loki_label_values"} <= names
+
+
+def test_http_app_marks_an_error_result():
+    resp = _mcp_request(server.build_http_app(), "tools/call", {"name": "nope", "arguments": {}})
+    result = resp.json()["result"]
+    assert result["isError"] is True
+    assert result["content"][0]["text"] == "Error: unknown tool 'nope'"
+
+
+def test_http_app_answers_healthz():
+    resp = _http(server.build_http_app(), "GET", "/healthz")
+    assert resp.status_code == 200 and resp.text == "ok"

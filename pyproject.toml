@@ -8,7 +8,7 @@ dependencies = [
     "httpx",
     # The server uses the mcp 2.x API.
     "mcp[cli]>=2,<3",
-    # Imported directly for the SSE transport.
+    # Imported directly for the streamable HTTP transport.
     "starlette",
     "uvicorn",
 ]
@@ -17,4 +17,5 @@ dependencies = [
 # Test dependencies.
 dev = [
     "pytest",
+    "httpx2",  # imported by the streamable HTTP tests
 ]

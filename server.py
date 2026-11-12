@@ -421,42 +421,38 @@ async def _dispatch(name: str, args: dict) -> str:
 
 # -- Entry point ------------------------------------------------------
 
+def build_http_app():
+    """Build the ASGI app for the streamable HTTP transport, served at `/mcp`. A
+    separate function so tests can construct it.
+
+    Stateless: each request is handled on its own, with no session to keep.
+    `/healthz` is the probe target; a GET on `/mcp` opens a stream that stays open.
+    """
+    from starlette.responses import PlainTextResponse
+    from starlette.routing import Route
+
+    async def health(_request) -> PlainTextResponse:
+        return PlainTextResponse("ok")
+
+    return _server.streamable_http_app(
+        stateless_http=True,
+        host=os.getenv("MCP_HOST", "0.0.0.0"),
+        custom_starlette_routes=[Route("/healthz", endpoint=health)],
+    )
+
+
 if __name__ == "__main__":
     transport = os.getenv("MCP_TRANSPORT", "stdio")
-    if transport == "sse":
-        from mcp.server.sse import SseServerTransport
-        from starlette.applications import Starlette
-        from starlette.requests import Request
-        from starlette.responses import Response
-        from starlette.routing import Mount, Route
+    if transport == "streamable-http":
         import uvicorn
 
-        host = os.getenv("MCP_HOST", "0.0.0.0")
-        port = int(os.getenv("MCP_PORT", "3000"))
-
-        sse = SseServerTransport("/messages/")
-
-        async def handle_sse(request: Request) -> Response:
-            async with sse.connect_sse(
-                request.scope, request.receive, request._send
-            ) as (read_stream, write_stream):
-                await _server.run(
-                    read_stream,
-                    write_stream,
-                    _server.create_initialization_options(),
-                )
-            # Starlette >= 1.0 calls the endpoint return value as an
-            # ASGI app; the SSE handler hijacks the connection, so return an
-            # empty Response to avoid "'NoneType' object is not callable".
-            return Response()
-
-        web_app = Starlette(
-            routes=[
-                Route("/sse", endpoint=handle_sse),
-                Mount("/messages/", app=sse.handle_post_message),
-            ]
+        uvicorn.run(
+            build_http_app(),
+            host=os.getenv("MCP_HOST", "0.0.0.0"),
+            port=int(os.getenv("MCP_PORT", "3000")),
         )
-        uvicorn.run(web_app, host=host, port=port)
+    elif transport != "stdio":
+        raise SystemExit(f"MCP_TRANSPORT must be 'stdio' or 'streamable-http', got {transport!r}")
     else:
         import asyncio
         from mcp.server.stdio import stdio_server
